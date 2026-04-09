@@ -14,7 +14,6 @@ Crucially, this engine bypasses standard US-centric TLH algorithms (like HIFO lo
 3. **Dual-Ledger FX:** Assets are priced in USD, but the tax ledger calculates all ACB and capital gains in CAD using daily spot rates, correctly modeling the impact of currency fluctuations on tax liabilities.
 
 ## System Architecture
-## System Architecture
 
 <p align="center">
   <img src="assets/tlh_architecture.png" alt="System Architecture Diagram" width="850"/>
