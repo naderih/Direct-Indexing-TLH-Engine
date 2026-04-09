@@ -1,0 +1,16 @@
+# Data files
+*.csv
+*.csv.gz
+*.dta
+*.parquet
+01_Data/
+outputs/
+
+# Python cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Environment
+.env
+venv/
