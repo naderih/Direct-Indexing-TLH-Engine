@@ -98,7 +98,7 @@ class CRATaxLedger:
     def process_dividends(self, current_shares, div_data_cad):
         """Adds CAD-adjusted dividends to the cash balance."""
         for permno, dps in div_data_cad.items():
-            if permno in current_shares:
+            if permno in current_shares and not pd.isna(dps) and dps > 0:
                 payout = current_shares[permno] * dps
                 self.cash_cad += payout
 
@@ -196,26 +196,34 @@ class CRATaxLedger:
         for permno in all_permnos:
             tgt = target_shares.get(permno, 0.0)
             cur = current_shares.get(permno, 0.0)
+            if pd.isna(tgt) or pd.isna(cur):
+                continue
+
             delta = tgt - cur
             
             if delta > 1e-6: 
                 # Failsafe 1: Block illegal buys (Superficial Sale)
                 if permno in self.superficial_loss_lockouts:
                     continue
-                    
-                if permno in current_prices_cad:
-                    price_cad = current_prices_cad[permno]
-                    cost = delta * price_cad
+
+                price_cad = current_prices_cad.get(permno)
+                if pd.isna(price_cad) or price_cad <= 0:
+                    if permno in self.positions:
+                        price_cad = self.positions[permno]['acb_per_share']
+                    else:
+                        continue # Cannot buy a brand new stock with no valid price!
+
+                cost = delta * price_cad
                     
                     # --- CASH PROTECTION FAILSAFE ---
-                    if self.cash_cad >= cost:
-                        self._buy(permno, delta, price_cad, current_date)
-                    else:
-                        # We are short on cash (caused by Dust Filter or rounding)!
-                        # Buy exactly what we can afford with the remaining cash.
-                        affordable_shares = np.floor((self.cash_cad / price_cad) * 10000.0) / 10000.0
-                        if affordable_shares > 1e-6:
-                            self._buy(permno, affordable_shares, price_cad, current_date)
+                if self.cash_cad >= cost:
+                    self._buy(permno, delta, price_cad, current_date)
+                else:
+                    # We are short on cash (caused by Dust Filter or rounding)!
+                    # Buy exactly what we can afford with the remaining cash.
+                    affordable_shares = np.floor((self.cash_cad / price_cad) * 10000.0) / 10000.0
+                    if affordable_shares > 1e-6:
+                        self._buy(permno, affordable_shares, price_cad, current_date)
 
 if __name__ == "__main__":
     print("--- Testing CRA TaxLedger ---")

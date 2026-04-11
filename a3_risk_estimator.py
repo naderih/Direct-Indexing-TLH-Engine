@@ -22,11 +22,11 @@ from config import DATA_CLEAN_DIR
 
 class FactorRiskEstimator:
     def __init__(self, 
-                 panel_path=DATA_CLEAN_DIR / 'panel_data.parquet', 
-                 factors_path=DATA_CLEAN_DIR / 'X.parquet',
-                 cov_path=DATA_CLEAN_DIR / 'factor_cov_matrices.parquet', 
-                 vol_path= DATA_CLEAN_DIR /'idio_vol.parquet',
-                 half_life=36, 
+                 panel_path = DATA_CLEAN_DIR / 'panel_data.parquet', 
+                 factors_path = DATA_CLEAN_DIR / 'X.parquet',
+                 cov_path = DATA_CLEAN_DIR / 'factor_cov_matrices.parquet', 
+                 vol_path = DATA_CLEAN_DIR /'idio_vol.parquet',
+                 half_life = 36, 
                  regression_weighting="WLS"):
         
         self.panel_path = panel_path

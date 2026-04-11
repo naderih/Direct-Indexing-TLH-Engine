@@ -28,12 +28,17 @@ class TLHBacktester:
     def __init__(self, 
                  start_date='2015-01-01', 
                  end_date='2023-12-31', 
-                 initial_capital=1_000_000.0):
+                 initial_capital =  1_000_000.0,
+                 tev_multiplier = 0.01,
+                 turnover_penalty = 0.10,
+                 harvest_threshold = -0.05,
+                 min_trade_cad = 50.0):
         
         print("Initializing Backtest Engine...")
         self.start_date = pd.to_datetime(start_date)
         self.end_date = pd.to_datetime(end_date)
         self.initial_capital = initial_capital
+        
         
         # 1. Load the Point-in-Time Universe
         self.df_univ = pd.read_parquet(DATA_DIR / 'tlh_universe.parquet')
@@ -51,9 +56,10 @@ class TLHBacktester:
         # ledger is initiated with empty current_shares, 0.0 total_equity_cad, and no positions 
         self.ledger = CRATaxLedger(initial_capital_cad = self.initial_capital)
 
-        self.optimizer = TaxAlphaOptimizer(tev_multiplier = 0.01,  # Allow TEV up to 1% of the market's natural variance
-                                           turnover_penalty = 0.10, # Strong enough to force sparse proxy buys 
-                                           harvest_threshold = -0.05)
+        self.optimizer = TaxAlphaOptimizer(tev_multiplier = tev_multiplier,  # Allow TEV up to 1% of the market's natural variance
+                                           turnover_penalty = turnover_penalty, # Strong enough to force sparse proxy buys 
+                                           harvest_threshold = harvest_threshold, 
+                                           min_trade_cad = min_trade_cad)
         
         # 3. Tracking Metrics
         self.daily_history =[]
@@ -82,8 +88,10 @@ class TLHBacktester:
             # we make sure we convert it to dataframe in the correct format
             if isinstance(daily_data, pd.Series): 
                 daily_data = daily_data.to_frame().T # Edge case: only 1 stock alive
-                
-            benchamrk_permnos = daily_data['permno'].values
+            
+            daily_data = daily_data.drop_duplicates(subset=['permno'], keep='last')
+            
+            benchmark_permnos = daily_data['permno'].values
             
             # Dictionaries are much faster than series or data frames indexing 
             # Fast Dictionaries for the Ledger
@@ -103,8 +111,10 @@ class TLHBacktester:
                 if shares > 0 and permno in self.ledger.positions:
                     acb = self.ledger.positions[permno]['acb_per_share']
                     
+                    # avoid zero division
                     if acb <= 0: 
                         continue
+                    
                     price = prices_cad.get(permno, acb)
                     if (price - acb) / acb <= self.optimizer.harvest_threshold:
                         trigger_optimization = True
@@ -132,18 +142,21 @@ class TLHBacktester:
                 # Get CRA Lockouts
                 do_not_buy, do_not_harvest = self.ledger.get_optimizer_constraints(today)
                 
+                owned_permnos = list(current_shares.keys())
+                optimization_universe = np.unique(np.concatenate([benchmark_permnos, owned_permnos]))
+
                 # Get V Matrix
-                V_mat = self.risk_model.build_factor_covariance(today, benchamrk_permnos)
+                V_mat = self.risk_model.build_factor_covariance(today, optimization_universe)
                 
                 # Run CVXPY
                 opt_w = self.optimizer.optimize(
-                    current_weights=current_w,
-                    bench_weights=bench_w,
-                    V_matrix=V_mat,
-                    do_not_buy=do_not_buy,
-                    do_not_harvest=do_not_harvest,
-                    current_prices=prices_cad,
-                    positions=self.ledger.positions
+                    current_weights = current_w,
+                    bench_weights = bench_w,
+                    V_matrix = V_mat,
+                    do_not_buy = do_not_buy,
+                    do_not_harvest = do_not_harvest,
+                    current_prices = prices_cad,
+                    positions =  self.ledger.positions
                 )
                 
                 # Translate & Execute
@@ -174,31 +187,69 @@ class TLHBacktester:
         print("\nSimulation Complete!")
         
     def generate_tearsheet(self):
-        """Calculates final Tax Alpha metrics."""
+        """Calculates final Tax Alpha metrics across multiple client tax profiles."""
         results = pd.DataFrame(self.daily_history).set_index('date')
-        
         start_aum = self.initial_capital
-        final_aum = results['portfolio_aum_cad'].iloc[-1]
-        total_return = (final_aum - start_aum) / start_aum
         
+        # 1. Portfolio Pre-Tax AUM
+        final_aum_pre_tax = results['portfolio_aum_cad'].iloc[-1]
+        
+        # 2. Calculate Benchmark AUM
+        sp500_returns = self.df_univ['sprtrn'].groupby('date').mean()
+        sp500_returns = sp500_returns.reindex(results.index).fillna(0.0)
+        benchmark_aum = start_aum * (1 + sp500_returns).cumprod()
+        final_bench_aum = benchmark_aum.iloc[-1]
+        
+        # 3. Tax Math (CRA Rules)
         total_losses_harvested = results['realized_losses_cad'].iloc[-1]
+        pre_tax_delta = final_aum_pre_tax - final_bench_aum
         
-        # Assuming a rough 50% inclusion rate and highest marginal tax bracket (e.g., 53% in Ontario)
-        # Tax Shield = Harvested Losses * 50% * 53% = Roughly 26.5% cash value
-        estimated_tax_shield = total_losses_harvested * 0.265
-        tax_alpha_bps = (estimated_tax_shield / start_aum) * 10000
-        
-        print("\n=================================================")
+        print("\n=================================================================")
         print(" INSTITUTIONAL TEARSHEET (Wealthsimple Direct Indexing)")
-        print("=================================================")
-        print(f"Initial Capital (CAD):     ${start_aum:,.2f}")
-        print(f"Final AUM (CAD):           ${final_aum:,.2f}")
-        print(f"Pre-Tax Total Return:      {total_return * 100:.2f}%")
-        print("-------------------------------------------------")
-        print(f"Total Losses Harvested:    ${total_losses_harvested:,.2f}")
-        print(f"Estimated Tax Savings:     ${estimated_tax_shield:,.2f} CAD")
-        print(f"Estimated Tax Alpha:       {tax_alpha_bps:.1f} bps")
-        print("=================================================\n")
+        print("=================================================================")
+        print(f"Initial Capital (CAD):          ${start_aum:,.2f}")
+        print(f"Final Benchmark AUM (CAD):      ${final_bench_aum:,.2f}")
+        print(f"Final Portfolio AUM (Pre-Tax):  ${final_aum_pre_tax:,.2f}")
+        
+        if pre_tax_delta < 0:
+            print(f"Pre-Tax Tracking Difference:   -${abs(pre_tax_delta):,.2f} (Expected Friction)")
+        else:
+            print(f"Pre-Tax Tracking Difference:   +${pre_tax_delta:,.2f}")
+            
+        print("-----------------------------------------------------------------")
+        print(f"Total Capital Losses Harvested: ${total_losses_harvested:,.2f}")
+        print("-----------------------------------------------------------------")
+        print(" TAX ALPHA SCENARIOS (Assumes 50% CRA Capital Gains Inclusion Rate)")
+        print("-----------------------------------------------------------------")
+        
+        # Define Client Profiles (Current approximate Ontario marginal rates)
+        profiles = {
+            "WS Generation (Top: 53.5%)": 0.5353,
+            "WS Premium (Mid: 43.4%)": 0.4341,
+            "WS Core (Base: 29.6%)": 0.2965
+        }
+        
+        print(f"{'Client Profile':<26} | {'Tax Savings':<14} | {'Net Value Add'}")
+        print("-" * 65)
+        
+        for profile_name, marginal_rate in profiles.items():
+            # CRA Formula: Harvested Loss * Inclusion Rate (50%) * Marginal Tax Rate
+            tax_benefit_ratio = 0.50 * marginal_rate
+            estimated_tax_shield = total_losses_harvested * tax_benefit_ratio
+            
+            final_aum_after_tax = final_aum_pre_tax + estimated_tax_shield
+            after_tax_delta = final_aum_after_tax - final_bench_aum
+            
+            # Formatting strings for clean output
+            shield_str = f"+${estimated_tax_shield:,.0f}"
+            if after_tax_delta > 0:
+                delta_str = f"+${after_tax_delta:,.0f} "
+            else:
+                delta_str = f"-${abs(after_tax_delta):,.0f} "
+            
+            print(f"{profile_name:<26} | {shield_str:<14} | {delta_str}")
+            
+        print("=================================================================\n")
         
         return results
 

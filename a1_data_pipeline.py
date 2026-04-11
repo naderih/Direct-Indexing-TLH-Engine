@@ -77,38 +77,48 @@ class DataPipeline:
 
 
     def process_prices_and_dividends(self):
-        """Applies split factors, cleans infinite noise, ffills missing prices, and applies tax drag."""
-        print("Applying split adjustments and 15% withholding taxes...")
         
-        # CRSP uses negative prices to indicate bid/ask averages on low liquidity days
+        """Applies strictly aligned cumulative split factors and applies tax drag."""
+        
+        print("Calculating Cumulative Split Adjustments and Withholding Taxes...")
+        
         self.df['dlyprc'] = self.df['dlyprc'].abs()
         
-        # 1. Kill the Infinity Bug at the source: 
-        # If the adjustment factor is exactly 0.0, division will cause Infinity.
-        # We replace 0.0 with NaN, and then fill all NaNs with 1.0 (no split).
-        self.df['disfacpr'] = self.df['disfacpr'].replace(0.0, np.nan).fillna(1.0)
-        self.df['disfacshr'] = self.df['disfacshr'].replace(0.0, np.nan).fillna(1.0)
+        # ---------------------------------------------------------
+        # THE CRSP 1 + FACPR FIX
+        # CRSP logs the *additional* shares (e.g., 4-for-1 split = 3.0).
+        # We must fill NaNs with 0.0 (no split), then ADD 1.0 to get the true divisor!
+        # ---------------------------------------------------------
+        self.df['disfacpr'] = self.df['disfacpr'].fillna(0.0)
+        self.df['disfacshr'] = self.df['disfacshr'].fillna(0.0)
         
-
-        # Split-adjusted prices and shares
-        self.df['prc_adj_usd'] = self.df['dlyprc'] / self.df['disfacpr']
-        self.df['shrout_adj'] = self.df['shrout'] * self.df['disfacshr']
+        self.df['true_divisor_prc'] = 1.0 + self.df['disfacpr']
+        self.df['true_divisor_shr'] = 1.0 + self.df['disfacshr']
         
-        # 2. Forward-Fill Missing Prices
-        # Sort by stock and date to ensure time flows correctly
+        # Ensure chronological order
         self.df.sort_values(['permno', 'date'], inplace=True)
+        
+        # Shift the divisor backward 1 day so it applies to the historical pre-split prices
+        self.df['split_event_prc'] = self.df.groupby('permno')['true_divisor_prc'].shift(-1).fillna(1.0)
+        self.df['split_event_shr'] = self.df.groupby('permno')['true_divisor_shr'].shift(-1).fillna(1.0)
+        
+        # Reverse cumprod to smoothly propagate the split backwards forever
+        self.df['cfacpr'] = self.df.iloc[::-1].groupby('permno')['split_event_prc'].cumprod().iloc[::-1]
+        self.df['cfacshr'] = self.df.iloc[::-1].groupby('permno')['split_event_shr'].cumprod().iloc[::-1]
 
-
-        # Forward fill prices so halted days carry yesterday's closing price
+        # 2. Calculate the true split-adjusted prices and shares
+        self.df['prc_adj_usd'] = self.df['dlyprc'] / self.df['cfacpr']
+        self.df['shrout_adj'] = self.df['shrout'] * self.df['cfacshr']
+        
+        # 3. Forward-Fill Missing Prices (Protects against trading halts)
         self.df['prc_adj_usd'] = self.df.groupby('permno')['prc_adj_usd'].ffill()
         
-        # Calculate daily USD Market Cap using the clean, filled prices
         self.df['mkt_cap_usd'] = self.df['prc_adj_usd'] * self.df['shrout_adj']
         
-        # Apply 15% Canadian tax drag on US cash dividends
+        # 4. Dividends must ALSO be divided by the cumulative factor to reflect historical basis!
         self.df['disdivamt'] = self.df['disdivamt'].fillna(0.0)
-        self.df['divamt_net_usd'] = self.df['disdivamt'] * (1 - US_WITHHOLDING_TAX_RATE)
-    
+        self.df['divamt_net_usd'] = (self.df['disdivamt'] / self.df['cfacpr']) * (1 - US_WITHHOLDING_TAX_RATE)
+
     def filter_sp500_universe(self):
         """
         Filters the massive CRSP universe down to strictly S&P 500 constituents 

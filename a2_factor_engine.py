@@ -36,6 +36,7 @@ Incorporates Fama-French 5-Factor metrics + Momentum + Distress + Volatility.
 """
 
 import os
+from pathlib import Path 
 import pandas as pd
 import numpy as np
 import warnings
@@ -63,7 +64,7 @@ class TLHFactorEngine:
         self.df['date'] = pd.to_datetime(self.df['date'])
 
     def build_factors(self) -> pd.DataFrame:
-        if self.out_path.exists():
+        if Path(self.out_path).exists():
             print(f'The X factor exposures file already exists at {self.out_path}. Skipping pipeline.')
             return  
 
@@ -75,9 +76,9 @@ class TLHFactorEngine:
         # 2. Raw Descriptors
         print("Calculating Raw Descriptors...")
         self._calc_size()
-        self._calc_value_pit()      # value built from descriptors
-        self._calc_momentum()       # momentum built from descriptors
-        self._calc_whited_wu()      # financial constraint
+        self._calc_value_pit()      #  Value Factor built from descriptors
+        self._calc_momentum()       #  Momentum Factor built from descriptors
+        self._calc_whited_wu()      #  Financial Constraint
         self._calc_profitability()  #  Quality Factor
         self._calc_investment()     #  Asset Growth Factor
         self._calc_volatility()     #  Risk Factor
