@@ -2,7 +2,8 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Optimization: CVXPY](https://img.shields.io/badge/Optimization-CVXPY-orange)](https://www.cvxpy.org/)
-[![Risk: Marchenko-Pastur](https://img.shields.io/badge/Risk_Model-Marchenko_Pastur-blueviolet)](#)
+[![Risk Model: Fundamental Factor](https://img.shields.io/badge/Risk_Model-Fundamental_Factor-success)](#)
+[![Math: Marchenko-Pastur](https://img.shields.io/badge/Denoising-Marchenko_Pastur-blueviolet)](#)
 
 ## Overview
 This repository contains an end-to-end Python risk engine and Tax-Loss Harvesting (TLH) backtesting framework. It is engineered to track a US equity benchmark (the S&P 500) while actively harvesting capital losses to generate tax alpha. 
