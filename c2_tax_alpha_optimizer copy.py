@@ -42,47 +42,31 @@ class TaxAlphaOptimizer:
         self.min_trade_cad = min_trade_cad
 
     
-    def _calculate_harvest_opportunity_cost(self, 
-                                            permnos: np.ndarray, 
-                                            current_prices: dict,
-                                            positions: dict) -> np.ndarray:
+    def _calculate_tax_penalty_vector(self, permnos, current_prices, positions):
         """
-        Creates the Opportunity Cost vector for the objective function.
-        Instead of negative yields, we use the absolute value of the loss as a penalty.
-        By minimizing this cost, CVXPY pushes the weight of losing stocks toward 0.0.
-        Since CVXPY minimizes the objective the dot product (h^T * harvest_opportunity_cost ) it will push the weight of 
-        highly-penalized stocks toward 0.0, organically executing the harvest!
-        
-        Args:
-            permnos (np.ndarray): Array of asset identifiers perfectly aligned with V_matrix.
-            current_prices (dict): Mapping of {permno: today_spot_price_cad}.
-            positions (dict): The Tax Ledger state {permno: {'shares': float, 'acb_per_share': float}}.
-            
-        Returns:
-            np.ndarray: A 1D vector of tax yields aligned to the permnos array.
+        Creates the Tax Penalty Vector (Y_tax).
+        - Selling Winners generates a Tax Bill (Positive Penalty).
+        - Selling Losers generates a Tax Shield (Negative Penalty / Benefit).
         """
-        # Initialize the penalty vector.
-        # The deeper the unrealized loss, the higher the opportunity cost (penalty) 
-        # of holding the asset and failing to exercise the tax-harvesting option.
-        harvest_opportunity_cost = np.zeros(len(permnos))
+        y_tax = np.zeros(len(permnos))
         
-        # for all the permnos in the V matrix 
         for i, permno in enumerate(permnos):
-            # 
             if permno in positions and positions[permno]['shares'] > 0:
                 acb = positions[permno]['acb_per_share']
-                if acb <= 0:
-                    continue
-                price = current_prices.get(permno, acb) # Default to ACB if price is missing
-                return_pct = (price - acb) / acb
+                price = current_prices.get(permno, acb)
                 
-                # If the loss breaches our threshold (e.g., worse than -5%)
-                if return_pct <= self.harvest_threshold:
-                    # A -30% loss becomes a +0.30 penalty
-                    # The panelty vecotr is zero for every stock with return above the threshold. 
-                    # for other stocks, it's invert of the retur nvalue
-                    harvest_opportunity_cost [i] = abs(return_pct) 
-        return harvest_opportunity_cost 
+                # Calculate the exact CAD Capital Gain/Loss per share
+                unrealized_pnl_per_share = price - acb
+                
+                # We want to scale this by the stock price so it acts as a percentage penalty
+                # e.g., A $10 gain on a $100 stock is a 10% penalty.
+                pnl_pct = unrealized_pnl_per_share / price
+                
+                # If it's a massive winner, pnl_pct is positive (High Penalty to sell).
+                # If it's a massive loser, pnl_pct is negative (Benefit to sell).
+                y_tax[i] = pnl_pct
+                
+        return y_tax
 
     def optimize(self, 
                  current_weights: pd.Series, 
@@ -113,22 +97,33 @@ class TaxAlphaOptimizer:
         h_current = current_weights.reindex(permnos).fillna(0.0).values
         h_b = bench_weights.reindex(permnos).fillna(0.0).values
         V = V_matrix.values
-        
-        opportunity_cost_vector = self._calculate_harvest_opportunity_cost(permnos, 
+        # tax penalty vector 
+        Y_tax = self._calculate_harvest_opportunity_cost(permnos, 
                                                                            current_prices, 
                                                                            positions)
         
         h = cp.Variable(N)
         
         # V2 OBJECTIVE: Minimize (Holding Penalty + Tracking Error + Friction)
+        # Calculate the trade delta (Target Weight - Current Weight)
+        delta_h = h - h_current
+        # We only care about SELLS. In CVXPY, we can isolate the negative part of the delta.
+        # cp.pos(-delta_h) extracts the absolute size of the sells.
+        # (e.g., if delta is -0.05, cp.pos(0.05) = 0.05).
+        sells_only = cp.pos(-delta_h)
+
+        # Multiply the SELLS by the Tax Penalty Vector
+        # - Selling a winner (positive Y_tax) * (sell size) = Positive Penalty (BAD)
+        # - Selling a loser (negative Y_tax) * (sell size) = Negative Penalty (GOOD)
+        tax_impact = sells_only.T @ Y_tax
+
 
         # Note: Since opportunity_cost_vector is positive for losers, 
         # we MINIMIZE (h^T * opportunity_cost_vector).
         # By minimizing a positive product, CVXPY forces h -> 0 for the losers.
-        tax_penalty = h.T @ opportunity_cost_vector
         turnover = cp.norm1(h - h_current)
         
-        objective = cp.Minimize(tax_penalty + (self.turnover_penalty * turnover))
+        objective = cp.Minimize(tax_impact + (self.turnover_penalty * turnover))
         
         #
         # CONSTRAINTS

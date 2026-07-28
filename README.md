@@ -18,7 +18,7 @@ Crucially, this system bypasses standard US-centric TLH assumptions (like HIFO l
 ## System Architecture
 
 <p align="center">
-  <img src="assets/tlh_architecture.png" alt="System Architecture Diagram" width="850"/>
+  <img src="assets/tlh_architecture_2.png" alt="System Architecture Diagram" width="850"/>
 </p>
 
 The codebase is heavily modularized to decouple data processing, structural risk modeling, the accounting state machine, and portfolio optimization:

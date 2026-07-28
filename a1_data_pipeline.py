@@ -85,9 +85,9 @@ class DataPipeline:
         self.df['dlyprc'] = self.df['dlyprc'].abs()
         
         # ---------------------------------------------------------
-        # THE CRSP 1 + FACPR FIX
-        # CRSP logs the *additional* shares (e.g., 4-for-1 split = 3.0).
-        # We must fill NaNs with 0.0 (no split), then ADD 1.0 to get the true divisor!
+        # THE CRSP 1 + FACPR
+        # CRSP logs the additional shares (e.g., 4-for-1 split = 3.0).
+        # We must fill NaNs with 0.0 (no split), then ADD 1.0 to get the true divisor
         # ---------------------------------------------------------
         self.df['disfacpr'] = self.df['disfacpr'].fillna(0.0)
         self.df['disfacshr'] = self.df['disfacshr'].fillna(0.0)
@@ -102,7 +102,7 @@ class DataPipeline:
         self.df['split_event_prc'] = self.df.groupby('permno')['true_divisor_prc'].shift(-1).fillna(1.0)
         self.df['split_event_shr'] = self.df.groupby('permno')['true_divisor_shr'].shift(-1).fillna(1.0)
         
-        # Reverse cumprod to smoothly propagate the split backwards forever
+        # Reverse cumprod to propagate the split backwards 
         self.df['cfacpr'] = self.df.iloc[::-1].groupby('permno')['split_event_prc'].cumprod().iloc[::-1]
         self.df['cfacshr'] = self.df.iloc[::-1].groupby('permno')['split_event_shr'].cumprod().iloc[::-1]
 
